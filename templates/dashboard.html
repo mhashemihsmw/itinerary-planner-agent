@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AI Trip Planner Dashboard</title>
+  <style>
+    :root { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; color: #0f172a; background: #f8fafc; }
+    body { margin: 0; padding: 24px; max-width: 1200px; margin-inline: auto; }
+    h1 { margin: 0 0 12px; }
+    p { margin: 0 0 16px; color: #475569; }
+    form { display: flex; gap: 12px; margin-bottom: 16px; }
+    input[type=text] { flex: 1; padding: 10px 12px; font-size: 15px; border: 1px solid #cbd5e1; border-radius: 8px; }
+    button { padding: 10px 14px; border: none; background: #2563eb; color: white; border-radius: 8px; font-weight: 600; cursor: pointer; }
+    button:disabled { background: #94a3b8; cursor: not-allowed; }
+    .layout { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
+    .card { background: white; border: 1px solid #e2e8f0; border-radius: 12px; padding: 16px; margin-bottom: 12px; }
+    .muted { color: #94a3b8; font-size: 13px; }
+    .error { color: #b91c1c; margin-top: 8px; }
+    .success { color: #15803d; margin-top: 8px; }
+    .btn-link { background: transparent; color: #2563eb; border: none; padding: 6px 0; font-weight: 600; cursor: pointer; }
+    .panel { background: white; border: 1px solid #e2e8f0; border-radius: 12px; padding: 16px; min-height: 200px; }
+    .it-body { white-space: pre-wrap; word-break: break-word; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; margin: 0; }
+  </style>
+</head>
+<body>
+  <h1>AI Trip Planner</h1>
+  <p>Submit a video link to generate or reuse its itinerary. All trip preferences are required: choose fixed dates or a flexible window.</p>
+  <form id="submit-form" style="display:flex; flex-direction:column; gap:12px; max-width:640px;">
+    <label class="muted" style="display:flex; flex-direction:column; gap:6px;">
+      Video URL
+      <input id="video-url" type="text" name="video_url" placeholder="Paste a YouTube/Instagram/TikTok URL..." required />
+    </label>
+
+    <div class="card" style="margin:0; display:flex; flex-direction:column; gap:12px;">
+      <div style="font-weight:600;">Trip preferences (required)</div>
+
+      <div style="display:flex; flex-direction:column; gap:8px;">
+        <label style="display:flex; align-items:center; gap:8px;">
+          <input type="radio" name="date-mode" value="fixed" id="mode-fixed" />
+          Fixed dates
+        </label>
+        <label style="display:flex; align-items:center; gap:8px;">
+          <input type="radio" name="date-mode" value="flexible" id="mode-flexible" />
+          Flexible month + days
+        </label>
+      </div>
+
+      <div id="fixed-fields" style="display:none; flex-direction:column; gap:10px;">
+        <label class="muted" style="display:flex; flex-direction:column; gap:6px;">Start date
+          <input id="start-date" type="date" />
+        </label>
+        <label class="muted" style="display:flex; flex-direction:column; gap:6px;">End date
+          <input id="end-date" type="date" />
+        </label>
+      </div>
+
+      <div id="flex-fields" style="display:none; flex-direction:column; gap:10px;">
+        <label class="muted" style="display:flex; flex-direction:column; gap:6px;">Flexible month
+          <input id="flexible-month" type="month" />
+        </label>
+        <label class="muted" style="display:flex; flex-direction:column; gap:6px;">Number of days
+          <input id="flexible-days" type="number" min="1" max="60" placeholder="e.g., 7" />
+        </label>
+      </div>
+
+      <label class="muted" style="display:flex; flex-direction:column; gap:6px;">Budget
+        <select id="budget">
+          <option value="">Select budget</option>
+          <option value="value">Value</option>
+          <option value="balanced">Balanced</option>
+          <option value="luxury">Luxury</option>
+        </select>
+      </label>
+
+      <label class="muted" style="display:flex; flex-direction:column; gap:6px;">Pace
+        <select id="pace">
+          <option value="">Select pace</option>
+          <option value="relaxed">Relaxed</option>
+          <option value="active">Active</option>
+        </select>
+      </label>
+
+      <label class="muted" style="display:flex; flex-direction:column; gap:6px;">Food
+        <select id="food">
+          <option value="">Select food preference</option>
+          <option value="vegan">Vegan</option>
+          <option value="vegetarian">Vegetarian</option>
+          <option value="all-eater">All-eater</option>
+        </select>
+      </label>
+
+      <label class="muted" style="display:flex; flex-direction:column; gap:6px;">Extra notes
+        <textarea id="extra-notes" rows="3" placeholder="e.g., Start days at 9am, enjoy mellow nightlife, okay with late dinners, avoid long hikes, prefer local coffee spots."></textarea>
+      </label>
+    </div>
+
+    <button id="submit-btn" type="submit">Generate</button>
+  </form>
+  <div id="message"></div>
+  <div class="layout">
+    <div>
+      <div id="videos"></div>
+    </div>
+    <div>
+      <div class="panel">
+        <div class="muted">Itinerary details</div>
+        <div id="itinerary-dest" style="font-weight:700; margin:8px 0;"></div>
+        <div id="itinerary-meta" class="muted"></div>
+        <div id="itinerary-body" class="it-body">Select a video to view its itinerary.</div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const STORAGE_KEY = 'trip-dashboard-state';
+
+    const form = document.getElementById('submit-form');
+    const input = document.getElementById('video-url');
+    const btn = document.getElementById('submit-btn');
+    const startDate = document.getElementById('start-date');
+    const endDate = document.getElementById('end-date');
+    const flexibleMonth = document.getElementById('flexible-month');
+    const flexibleDays = document.getElementById('flexible-days');
+    const modeFixed = document.getElementById('mode-fixed');
+    const modeFlexible = document.getElementById('mode-flexible');
+    const fixedFields = document.getElementById('fixed-fields');
+    const flexFields = document.getElementById('flex-fields');
+    const budget = document.getElementById('budget');
+    const pace = document.getElementById('pace');
+    const food = document.getElementById('food');
+    const extraNotes = document.getElementById('extra-notes');
+    const msg = document.getElementById('message');
+    const list = document.getElementById('videos');
+    const itDest = document.getElementById('itinerary-dest');
+    const itMeta = document.getElementById('itinerary-meta');
+    const itBody = document.getElementById('itinerary-body');
+    let firstRendered = false;
+
+    function setMessage(text, type = 'error') {
+      msg.textContent = text;
+      msg.className = type;
+    }
+
+    function escapeHtml(str) {
+      return str.replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[c] || c));
+    }
+
+    function linkify(str) {
+      const escaped = escapeHtml(str || '');
+      return escaped.replace(/(https?:\/\/[^\s]+)/g, '<a href="$1" target="_blank" rel="noopener">$1</a>');
+    }
+
+    function renderItinerary(it, metaLabel = '') {
+      if (!it) {
+        itDest.textContent = '';
+        itMeta.textContent = metaLabel || 'No itinerary available';
+        itBody.innerHTML = 'Select a video to view its itinerary.';
+        return;
+      }
+      itDest.textContent = `${it.destination || 'Unknown destination'} — ${it.duration_days || '?'} days`;
+      itMeta.textContent = metaLabel || '';
+      const plan = (it.daily_plan || []).map(d => {
+        const title = linkify(d.title || '');
+        const acts = (d.activities || []).map(a => `<div>- ${linkify(a)}</div>`).join('');
+        return `<div style="margin-bottom:12px;"><div style="font-weight:600;">Day ${d.day}: ${title}</div>${acts}</div>`;
+      }).join('');
+      const attractions = (it.key_attractions || []).length ? `<div><strong>Attractions:</strong> ${linkify(it.key_attractions.join(', '))}</div>` : '';
+      const food = (it.food_suggestions || []).length ? `<div><strong>Food:</strong> ${linkify(it.food_suggestions.join(', '))}</div>` : '';
+      itBody.innerHTML = [plan, attractions, food].filter(Boolean).join('<br>');
+    }
+
+    function toggleDateFields() {
+      if (modeFixed.checked) {
+        fixedFields.style.display = 'flex';
+        flexFields.style.display = 'none';
+      } else if (modeFlexible.checked) {
+        fixedFields.style.display = 'none';
+        flexFields.style.display = 'flex';
+      } else {
+        fixedFields.style.display = 'none';
+        flexFields.style.display = 'none';
+      }
+    }
+
+    modeFixed.addEventListener('change', toggleDateFields);
+    modeFlexible.addEventListener('change', toggleDateFields);
+
+    function loadState() {
+      try {
+        const raw = localStorage.getItem(STORAGE_KEY);
+        if (!raw) return;
+        const state = JSON.parse(raw);
+        input.value = state.video_url || '';
+        if (state.dateMode === 'fixed') {
+          modeFixed.checked = true;
+          startDate.value = state.start_date || '';
+          endDate.value = state.end_date || '';
+        } else if (state.dateMode === 'flexible') {
+          modeFlexible.checked = true;
+          flexibleMonth.value = state.flexible_month || '';
+          flexibleDays.value = state.flexible_days || '';
+        }
+        budget.value = state.budget || '';
+        pace.value = state.pace || '';
+        food.value = state.food_preference || '';
+        extraNotes.value = state.extra_notes || '';
+        toggleDateFields();
+      } catch (e) {
+        console.warn('Failed to load saved state', e);
+      }
+    }
+
+    function saveState(state) {
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+      } catch (e) {
+        console.warn('Failed to save state', e);
+      }
+    }
+
+    async function refresh() {
+      const res = await fetch('/videos');
+      if (!res.ok) return setMessage('Failed to load videos');
+      const data = await res.json();
+      list.innerHTML = '';
+      const items = data.items || [];
+      items.forEach((v, idx) => {
+        const card = document.createElement('div');
+        card.className = 'card';
+        let itinerarySummary = 'No itinerary yet';
+        let itineraryParsed = null;
+        try {
+          const it = typeof v.itinerary_json === 'string' ? JSON.parse(v.itinerary_json) : v.itinerary_json;
+          if (it && it.destination) {
+            itinerarySummary = `Destination: ${it.destination} — ${it.duration_days || '?'} days`;
+            itineraryParsed = it;
+          }
+        } catch (_) {
+          itinerarySummary = 'Itinerary data unavailable';
+        }
+        const itMetaLabel = v.itinerary_version ? `v${v.itinerary_version} · ${new Date(v.itinerary_created_at).toLocaleString()}` : 'pending';
+        card.innerHTML = `
+          <div><strong>${v.platform}</strong> — <a href="${v.video_url}" target="_blank">${v.video_url}</a></div>
+          <div class="muted">Added ${new Date(v.created_at).toLocaleString()}</div>
+          <div>${itinerarySummary}</div>
+          <div class="muted">Itinerary: ${itMetaLabel}</div>
+          <button class="btn-link" data-id="${v.id}">${itineraryParsed ? 'View itinerary' : 'Fetch itinerary'}</button>
+        `;
+        card.querySelector('button').addEventListener('click', async () => {
+          if (itineraryParsed) {
+            renderItinerary(itineraryParsed, itMetaLabel);
+            return;
+          }
+          try {
+            const r = await fetch(`/videos/${v.id}/itinerary`);
+            if (!r.ok) throw new Error('No itinerary yet');
+            const it = await r.json();
+            const parsed = typeof it.itinerary_json === 'string' ? JSON.parse(it.itinerary_json) : it.itinerary_json;
+            renderItinerary(parsed, `v${it.version} · ${new Date(it.created_at).toLocaleString()}`);
+          } catch (err) {
+            setMessage(err.message || 'Could not load itinerary');
+          }
+        });
+        list.appendChild(card);
+
+        // Auto-load the first itinerary when the dashboard opens
+        if (!firstRendered && idx === 0) {
+          if (itineraryParsed) {
+            renderItinerary(itineraryParsed, itMetaLabel);
+            firstRendered = true;
+          } else {
+            fetch(`/videos/${v.id}/itinerary`).then(async (r) => {
+              if (!r.ok) return;
+              const it = await r.json();
+              const parsed = typeof it.itinerary_json === 'string' ? JSON.parse(it.itinerary_json) : it.itinerary_json;
+              renderItinerary(parsed, `v${it.version} · ${new Date(it.created_at).toLocaleString()}`);
+              firstRendered = true;
+            }).catch(() => {});
+          }
+        }
+      });
+    }
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      setMessage('');
+      btn.disabled = true;
+      try {
+        const dateMode = modeFixed.checked ? 'fixed' : modeFlexible.checked ? 'flexible' : '';
+
+        if (!dateMode) {
+          throw new Error('Select fixed dates or flexible month + days');
+        }
+
+        if (dateMode === 'fixed' && (!startDate.value || !endDate.value)) {
+          throw new Error('Provide start and end dates');
+        }
+
+        if (dateMode === 'flexible' && (!flexibleMonth.value || !flexibleDays.value)) {
+          throw new Error('Provide flexible month and number of days');
+        }
+
+        if (!budget.value || !pace.value || !food.value) {
+          throw new Error('Select budget, pace, and food preference');
+        }
+
+        const payload = {
+          video_url: input.value,
+          start_date: dateMode === 'fixed' ? startDate.value : undefined,
+          end_date: dateMode === 'fixed' ? endDate.value : undefined,
+          flexible_month: dateMode === 'flexible' ? flexibleMonth.value : undefined,
+          flexible_days: dateMode === 'flexible' ? Number(flexibleDays.value) : undefined,
+          budget: budget.value,
+          pace: pace.value,
+          food_preference: food.value,
+          extra_notes: extraNotes.value || undefined,
+        };
+
+        saveState({ ...payload, dateMode });
+
+        const res = await fetch('/generate-itinerary', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          throw new Error(err.detail || 'Request failed');
+        }
+        const itinerary = await res.json();
+        setMessage('Itinerary generation completed.', 'success');
+        renderItinerary(itinerary, 'Latest generated');
+        await refresh();
+      } catch (err) {
+        setMessage(err.message || 'Something went wrong');
+      } finally {
+        btn.disabled = false;
+      }
+    });
+
+    loadState();
+    refresh();
+    toggleDateFields();
+  </script>
+</body>
+</html>
