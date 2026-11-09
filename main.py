@@ -9,8 +9,7 @@ import tempfile
 from datetime import date
 from functools import lru_cache
 from pathlib import Path
-from typing import List, Optional
-from urllib.parse import parse_qs, urlparse
+from typing import Optional
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
@@ -20,7 +19,7 @@ from pydantic import BaseModel, Field
 from faster_whisper import WhisperModel
 from yt_dlp import YoutubeDL
 
-from models.schemas import UserPreferences
+from models.schemas import Itinerary, UserPreferences
 from services import db as db_service
 from services.openai_service import OpenAIService
 
@@ -92,22 +91,6 @@ class ItineraryRequest(BaseModel):
                 "extra_notes": "We start days at 9am, love local coffee and mild nightlife."
             }
         }
-
-
-class DailyActivity(BaseModel):
-    day: int
-    title: str
-    activities: List[str]
-
-
-class ItineraryResponse(BaseModel):
-    destination: str
-    best_season: str
-    duration_days: int
-    daily_plan: List[DailyActivity]
-    key_attractions: List[str]
-    food_suggestions: List[str]
-
 
 
 async def fetch_caption_text(video_url: str) -> str:
@@ -237,7 +220,7 @@ async def get_video_itinerary(video_id: int):
     return itinerary
 
 
-@app.post("/generate-itinerary", response_model=ItineraryResponse)
+@app.post("/generate-itinerary", response_model=Itinerary)
 async def generate_itinerary(request: ItineraryRequest):
     """
     Generate a structured travel itinerary from video caption text.
@@ -321,18 +304,22 @@ async def generate_itinerary(request: ItineraryRequest):
         await asyncio.to_thread(
             db_service.insert_itinerary,
             video_row["id"],
-            itinerary.model_dump(),
-            preferences.model_dump(exclude_none=False),
+            # mode="json" turns dates into ISO strings so the JSONB payload serializes;
+            # preferences keep native dates because they map to DATE columns.
+            itinerary.model_dump(mode="json"),
+            preferences.model_dump(),
         )
 
         return itinerary
     
-    except HTTPException as e:
+    except HTTPException:
         # Preserve HTTPExceptions from validation/caption fetch
-        raise e
+        raise
     except ValueError as e:
+        log.warning("itinerary generation rejected: %s", e)
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
+        log.exception("itinerary generation failed")
         raise HTTPException(
             status_code=500,
             detail=f"Failed to generate itinerary: {str(e)}"
@@ -341,4 +328,4 @@ async def generate_itinerary(request: ItineraryRequest):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)

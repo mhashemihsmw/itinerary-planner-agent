@@ -1,130 +1,158 @@
 # AI Trip Planner Core
 
-FastAPI backend that transcribes travel videos, extracts travel facts, and generates structured itineraries with OpenAI. Captions are cached, itineraries are versioned in PostgreSQL, and a minimal dashboard lists recent runs.
+Turn a travel video into a ready-to-use trip plan.
 
-## Features
+Paste a link to a travel video from YouTube, TikTok or Instagram, and tell the app when you're travelling and what you like (budget, pace, food). The app listens to the video, picks out the places and tips it mentions, and builds a day-by-day itinerary that fits your dates and preferences. Every plan is saved, so you can revisit past videos and their itineraries from a simple dashboard.
 
-- Caption ingestion via yt-dlp + faster-whisper (with title/description fallback)
-- Two-step OpenAI pipeline (fact extraction → itinerary generation)
-- PostgreSQL persistence with versioned itineraries and cached transcriptions
-- Simple HTML dashboard to submit links and view history
-- Async FastAPI API with CORS enabled
+## Getting started
 
-## Prerequisites
+### Requirements
 
-- Python 3.9+
-- FFmpeg available on PATH (required for yt-dlp audio extraction)
-- PostgreSQL database (schema `itinerary` by default)
-- OpenAI API key
+- Python 3.12 (tested). Python 3.14 does not work with the pinned dependencies.
+- FFmpeg (on Ubuntu/WSL: `sudo apt install -y ffmpeg`)
+- Docker, for the PostgreSQL database
+- An OpenAI API key
 
-## Setup
+Commands are for Linux, WSL and macOS. On Windows PowerShell, activate the venv with `.venv\Scripts\activate`.
+
+### 1. Install dependencies
 
 ```bash
-cd "d:\My Files\Projects\Apps\Voya\info-extractor"
-python -m venv .venv
-.venv\Scripts\activate
+python3.12 -m venv .venv
+source .venv/bin/activate
+pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-### Environment variables
+### 2. Configure `.env`
 
-Create `.env` in the project root:
+Create `.env` in the project root. It is git-ignored, so never commit it.
 
 ```
 OPENAI_API_KEY=sk-...
-DATABASE_URL=postgresql://user:password@localhost:5432/dbname
-DB_SCHEMA=itinerary                  # optional, default: itinerary
-WHISPER_MODEL=small                  # optional (see faster-whisper docs)
-WHISPER_COMPUTE_TYPE=int8            # optional: int8, float16, etc.
+
+PGDATABASE=Voya
+PGUSER=postgres
+PGPASSWORD=password
+PGHOST=localhost
+PGPORT=5432
 ```
 
-### Database schema (SQL)
+Optional settings:
 
-Run once in your database (adjust schema name if you changed `DB_SCHEMA`):
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `DATABASE_URL` | none | Full connection string; overrides the `PG*` variables |
+| `DB_SCHEMA` | `itinerary` | Database schema name |
+| `WHISPER_MODEL` | `small` | Speech-to-text model size |
+| `WHISPER_COMPUTE_TYPE` | `int8` | `int8` for CPU, `float16` for GPU |
+| `HF_TOKEN` | none | Faster speech-to-text model downloads |
 
-```sql
-CREATE SCHEMA IF NOT EXISTS itinerary;
+### 3. Start the database
 
-CREATE TABLE IF NOT EXISTS itinerary.videos (
-    id SERIAL PRIMARY KEY,
-    platform TEXT NOT NULL,
-    video_id TEXT NOT NULL,
-    video_url TEXT NOT NULL,
-    transcription TEXT,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    CONSTRAINT uq_video UNIQUE (platform, video_id)
-);
-
-CREATE TABLE IF NOT EXISTS itinerary.itineraries (
-    id SERIAL PRIMARY KEY,
-    video_id INT NOT NULL REFERENCES itinerary.videos(id) ON DELETE CASCADE,
-    itinerary_json JSONB NOT NULL,
-    version INT NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE INDEX IF NOT EXISTS idx_itineraries_video_version
-    ON itinerary.itineraries(video_id, version DESC);
-```
-
-## Run the API
+The user, password and database name must match `.env`.
 
 ```bash
+docker run -d --name voya-pg \
+  -e POSTGRES_USER=postgres \
+  -e POSTGRES_PASSWORD=password \
+  -e POSTGRES_DB=Voya \
+  -p 127.0.0.1:5432:5432 \
+  -v voya-pgdata:/var/lib/postgresql/data \
+  postgres:16
+
+docker exec -i voya-pg psql -U postgres -d Voya < schema.sql
+```
+
+Data is stored in the `voya-pgdata` volume, so it survives restarts. You can also browse the data in DBeaver or pgAdmin: connect to `localhost:5432`, database `Voya`, using the credentials from `.env`. The tables are in the `itinerary` schema.
+
+### 4. Run and verify
+
+```bash
+pytest tests/              # all tests should pass
 uvicorn main:app --reload
 ```
 
-- Swagger UI: http://localhost:8000/docs
-- ReDoc: http://localhost:8000/redoc
-- Dashboard: http://localhost:8000/dashboard
+Open http://localhost:8000/dashboard and submit a short travel video. The first run is slow because the speech-to-text model is downloaded.
 
-## Endpoints
+### Daily workflow
 
-- `GET /` – health check
-- `GET /videos` – list recent videos with latest itinerary
-- `GET /videos/{id}/itinerary` – latest itinerary for a video row
-- `GET /dashboard` – lightweight HTML dashboard
-- `POST /generate-itinerary` – generate and store itinerary (see payload below)
+```bash
+source .venv/bin/activate
+docker start voya-pg
+uvicorn main:app --reload
+```
 
-Request payload:
+To reset the database, run `docker rm -f voya-pg && docker volume rm voya-pgdata`, then repeat step 3.
+
+## API
+
+Interactive docs: http://localhost:8000/docs
+
+| Method | Path | Description |
+| --- | --- | --- |
+| `GET` | `/` | Health check |
+| `GET` | `/dashboard` | Web dashboard |
+| `GET` | `/videos` | Recent videos with their latest itinerary |
+| `GET` | `/videos/{id}/itinerary` | Latest itinerary for a video |
+| `POST` | `/generate-itinerary` | Generate and save an itinerary |
+
+`POST /generate-itinerary` needs **either** `start_date` + `end_date` **or** `flexible_month` + `flexible_days`:
 
 ```json
 {
-  "video_url": "https://www.youtube.com/watch?v=dummy",
-  "caption_text": "Optional override; if omitted we auto-transcribe"
+  "video_url": "https://www.youtube.com/watch?v=RiJhQkvlCok",
+  "start_date": "2026-12-01",
+  "end_date": "2026-12-05",
+  "budget": "balanced",
+  "pace": "relaxed",
+  "food_preference": "all-eater",
+  "extra_notes": "We start days at 9am and like local coffee."
 }
 ```
 
+| Field | Values |
+| --- | --- |
+| `video_url` | Any link yt-dlp supports |
+| `caption_text` | Optional; skips transcription when provided |
+| `start_date`, `end_date` | `YYYY-MM-DD` |
+| `flexible_month`, `flexible_days` | `YYYY-MM`, 1–60 |
+| `budget` | `value`, `balanced`, `luxury` |
+| `pace` | `relaxed`, `active` |
+| `food_preference` | `vegan`, `vegetarian`, `all-eater` |
+| `extra_notes` | Free text, max 800 characters |
+
 ## How it works
 
-1) Fetch captions
-- If `caption_text` is missing, download audio with yt-dlp and transcribe with faster-whisper; enrich with title/description metadata.
-- Transcription is cached per `(platform, video_id)` so repeated calls avoid re-transcribing.
+1. **Transcribe**: yt-dlp downloads the audio, faster-whisper transcribes it locally, and the video's title and description are added. Transcripts are cached per video, so each video is only transcribed once.
+2. **Extract facts**: `gpt-4o-mini` pulls structured travel facts out of the transcript.
+3. **Plan**: `gpt-4o-mini` turns those facts and your preferences into a day-by-day itinerary, validated with Pydantic.
+4. **Save**: each itinerary is stored in PostgreSQL as a new version for that video.
 
-2) AI pipeline
-- Step 1: `gpt-4o-mini` extracts structured travel facts (low temperature).
-- Step 2: `gpt-4o-mini` produces a paced day-by-day itinerary (moderate temperature).
-- Responses are validated with Pydantic models in [models/schemas.py](models/schemas.py).
+## Project layout
 
-3) Persistence
-- Videos and their transcriptions are upserted; itineraries are stored as versioned JSON in PostgreSQL for history.
-
-## Testing
-
-```bash
-pytest
+```
+main.py                        API routes, request validation, video transcription
+models/schemas.py              Pydantic models (preferences, travel facts, itinerary)
+services/openai_service.py     Two-step OpenAI pipeline
+services/db.py                 PostgreSQL access
+services/gemeni_service.py     Experimental Gemini pipeline (not used by the app)
+services/langchain_service.py  Experimental LangChain pipeline (not used by the app)
+templates/dashboard.html       Dashboard page
+schema.sql                     Database schema
+tests/                         Unit tests
+test_api.py                    Manual smoke test; needs a running server
 ```
 
-CI-style quick check for transcription logic only:
+## Development guidelines
 
-```bash
-pytest tests/test_fetch_caption_text.py
-```
-
-## Troubleshooting
-
-- Whisper model download happens on first run; expect a pause and network usage.
-- Ensure FFmpeg is on PATH; yt-dlp/ffmpeg errors often indicate a missing binary.
-- If database errors appear, verify `DATABASE_URL`/`PG*` env vars and that the schema/tables exist.
+- **Schema changes**: update `schema.sql` and `services/db.py` together. There is no migration tool, so apply `ALTER TABLE` statements to existing databases by hand.
+- **Models**: keep shared models in `models/schemas.py`; don't duplicate them in `main.py`.
+- **JSON columns**: store Pydantic models with `model_dump(mode="json")`, because plain `model_dump()` keeps `date` objects that can't be serialized.
+- **Blocking calls**: database, yt-dlp and Whisper calls are synchronous. Wrap them in `asyncio.to_thread(...)` inside async routes.
+- **Dependencies**: after adding or upgrading a package, run `pip check` and `pytest tests/`, then update its pin in `requirements.txt`.
+- **Tests**: put tests in `tests/` and mock yt-dlp, Whisper and OpenAI so tests run offline. Run `pytest tests/` rather than plain `pytest`, which also picks up `test_api.py`.
+- **Secrets**: keep them in `.env` only.
 
 ## License
 
